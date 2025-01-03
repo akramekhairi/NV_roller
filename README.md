@@ -50,7 +50,7 @@ To visualize the 3D point cloud extracted from the DSI, install `open3d` first a
 
     pip install open3d
 
-and then run:
+and then run (remove -i /path/to/pointcloud.pcd to run the most recently computed pointcloud):
 
     python scripts/visualize_pointcloud.py -i /path/to/pointcloud.pcd
     
