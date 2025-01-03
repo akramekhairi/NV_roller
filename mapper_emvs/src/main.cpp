@@ -13,11 +13,13 @@
 
 // Input parameters
 DEFINE_string(bag_filename, "input.bag", "Path to the rosbag");
-DEFINE_string(event_topic, "/dvs/events", "Name of the event topic (default: /dvs/events)");
-DEFINE_string(pose_topic, "/optitrack/davis", "Name of the pose topic (default: /optitrack/davis)");
-DEFINE_string(camera_info_topic, "/dvs/camera_info", "Name of the camera info topic (default: /dvs/camera_info)");
+DEFINE_string(event_topic, "/capture_node/events", "Name of the event topic (default: /dvs/events)");
+DEFINE_string(pose_topic, "/dvs/pose", "Name of the pose topic (default: /optitrack/davis)");
+DEFINE_string(camera_info_topic, "/capture_node/camera_info", "Name of the camera info topic (default: /dvs/camera_info)");
 DEFINE_double(start_time_s, 0.0, "Start time in seconds (default: 0.0)");
 DEFINE_double(stop_time_s, 1000.0, "Stop time in seconds (default: 1000.0)");
+DEFINE_double(speed, 0.2, "Speed of motion in y direction in meters/second (default: 0.2)");
+
 
 // Disparity Space Image (DSI) parameters. Section 5.2 in the IJCV paper.
 DEFINE_int32(dimX, 0, "X dimension of the voxel grid (if 0, will use the X dim of the event camera) (default: 0)");
@@ -25,7 +27,7 @@ DEFINE_int32(dimY, 0, "Y dimension of the voxel grid (if 0, will use the Y dim o
 DEFINE_int32(dimZ, 100, "Z dimension of the voxel grid (default: 100) must be <= 256");
 DEFINE_double(fov_deg, 0.0, "Field of view of the DSI, in degrees (if < 10, will use the FoV of the event camera) (default: 0.0)");
 DEFINE_double(min_depth, 0.3, "Min depth, in meters (default: 0.3)");
-DEFINE_double(max_depth, 5.0, "Max depth, in meters (default: 5.0)");
+DEFINE_double(max_depth, 0.6, "Max depth, in meters (default: 5.0)");
 
 // Depth map parameters (selection and noise removal). Section 5.2.3 in the IJCV paper.
 DEFINE_int32(adaptive_threshold_kernel_size, 5, "Size of the Gaussian kernel used for adaptive thresholding. (default: 5)");
@@ -55,12 +57,27 @@ int main(int argc, char** argv)
   sensor_msgs::CameraInfo camera_info_msg;
   std::vector<dvs_msgs::Event> events;
   std::map<ros::Time, geometry_utils::Transformation> poses;
-  data_loading::parse_rosbag(FLAGS_bag_filename, events, poses, camera_info_msg,
-                             FLAGS_event_topic, FLAGS_camera_info_topic, FLAGS_pose_topic, FLAGS_start_time_s, FLAGS_stop_time_s);
-
+  data_loading::parse_rosbag(FLAGS_bag_filename, events, camera_info_msg,
+                             FLAGS_event_topic, FLAGS_camera_info_topic, FLAGS_start_time_s, FLAGS_stop_time_s);
   // Create a camera object from the loaded intrinsic parameters
   image_geometry::PinholeCameraModel cam;
   cam.fromCameraInfo(camera_info_msg);
+
+    // Create two poses: one at t=0 (identity) and one at t=100
+  geometry_utils::Transformation T_start;
+  T_start.setIdentity(); // Identity transformation at t=0
+
+  // Create end transformation with translation in y direction
+  Eigen::Vector3d translation(0.0, -FLAGS_speed * (FLAGS_stop_time_s-FLAGS_start_time_s), 0.0);
+  Eigen::Matrix3d rotation = Eigen::Matrix3d::Identity();
+
+  // Create the transformation using the constructor
+  geometry_utils::Transformation T_end(translation, Eigen::Quaterniond(rotation));
+
+  // Add poses to the map
+  poses[ros::Time(FLAGS_start_time_s)] = T_start;
+  poses[ros::Time(FLAGS_stop_time_s)] = T_end;
+
 
   // Use linear interpolation to compute the camera pose for each event
   LinearTrajectory trajectory = LinearTrajectory(poses);
@@ -128,6 +145,14 @@ int main(int argc, char** argv)
   depthmap_color.copyTo(depth_on_canvas, semidense_mask);
   cv::imwrite("depth_colored.png", depth_on_canvas);
 
+  // New code for inverted grayscale depth map
+  cv::Mat inverted_depth_map_255 = 255.0 - ((depth_map - dsi_shape.min_depth_) * (255.0 / (dsi_shape.max_depth_ - dsi_shape.min_depth_)));
+  cv::Mat inverted_depth_8bit;
+  inverted_depth_map_255.convertTo(inverted_depth_8bit, CV_8U);
+  cv::Mat depth_on_black = cv::Mat(depth_map.rows, depth_map.cols, CV_8U, cv::Scalar(0));
+  inverted_depth_8bit.copyTo(depth_on_black, semidense_mask);
+  cv::imwrite("depth_grayscale_inverted.png", depth_on_black);
+
 
   // 3. Convert semi-dense depth map to point cloud
   EMVS::OptionsPointCloud opts_pc;
@@ -143,3 +168,4 @@ int main(int argc, char** argv)
   
   return 0;
 }
+
