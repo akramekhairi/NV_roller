@@ -28,6 +28,7 @@ Install `pcl-ros` ((replace {ros-version} with your ros version name e.g: noetic
 
 Build the package(s):
 
+    cd ..
     catkin build mapper_emvs
     source ~/roller_ws/devel/setup.bash
 
