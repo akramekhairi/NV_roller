@@ -20,7 +20,7 @@ Clone this repository:
 
 Clone dependencies:
 
-    vcs-import < rpg_emvs/dependencies.yaml
+    vcs-import < NV_roller/dependencies.yaml
 
 Install `pcl-ros` ((replace {ros-version} with your ros version name e.g: noetic, kinetic)):
 
@@ -33,16 +33,29 @@ Build the package(s):
 
 # Running example
 
-Download [stairs.bag](http://rpg.ifi.uzh.ch/datasets/davis/slider_depth.bag) data file
+Download [stairs.bag](https://drive.google.com/file/d/10F9h2M2PAGDdByKMUF5B6sC79MuqnsQy/view?usp=sharing) data file
 
 **Run the example**:
 
     roscd mapper_emvs
-    rosrun mapper_emvs run_emvs --bag_filename=/path/to/slider_depth.bag --flagfile=cfg/slider_depth.conf
+    rosrun mapper_emvs run_emvs --bag_filename=/path/to/stairs.bag --flagfile=cfg/stairs.conf
 
 
 # Visualization
 
+## Point Cloud
+
+To visualize the 3D point cloud extracted from the DSI, install `open3d` first as follows:
+
+    pip install open3d
+
+and then run:
+
+    python scripts/visualize_pointcloud.py -i /path/to/pointcloud.pcd
+    
+You should be able to inspect the pointcloud as shown in the image below (Stairs with PointCloud screenshots)
+
+<img src="mapper_emvs/images/slant_depth.png" width="40%">
 
 ## Disparity Space Image (DSI)
 
@@ -72,19 +85,5 @@ To visualize the DSI with moving slices (i.e., cross sections), run:
 which should produce the following output:
 
 <img src="mapper_emvs/images/slider_depth/dsi_slice.gif" width="60%">
-
-## Point Cloud
-
-To visualize the 3D point cloud extracted from the DSI, install `pypcd` first as follows:
-
-    pip install pypcd
-
-and then run:
-
-    python scripts/visualize_pointcloud.py -i /path/to/pointcloud.pcd
-    
-A 3D matplotlib interactive window like the one below should appear, allowing you to inspect the point cloud (color-coded according to depth with respect to the reference view):
-    
-<img src="mapper_emvs/images/slider_depth/pointcloud.gif" width="40%">
 
             
