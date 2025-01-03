@@ -16,7 +16,7 @@ Create a new catkin workspace if needed (replace {ros-version} with your ros ver
 Clone this repository:
 
     cd src/
-    git clone git@github.com:uzh-rpg/rpg_emvs.git
+    git clone [git@github.com:uzh-rpg/rpg_emvs.git](https://github.com/akramekhairi/NV_roller.git)
 
 Clone dependencies:
 
