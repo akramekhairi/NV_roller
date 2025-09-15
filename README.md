@@ -54,9 +54,6 @@ and then run (remove -i /path/to/pointcloud.pcd to run the most recently compute
 
     python scripts/visualize_pointcloud.py -i /path/to/pointcloud.pcd
     
-You should be able to inspect the pointcloud as shown in the image below (Stairs with PointCloud screenshots)
-
-<img src="mapper_emvs/images/slant_depth.png" width="40%">
 
 ## Disparity Space Image (DSI)
 
