@@ -16,7 +16,7 @@ Create a new catkin workspace if needed (replace {ros-version} with your ros ver
 Clone this repository:
 
     cd src/
-    git clone https://github.com/akramekhairi/NV_roller.git
+    git clone https://github.com/akramekhairi/NV_roller.git --branch rl_ycb
 
 Clone dependencies:
 
