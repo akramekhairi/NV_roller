@@ -26,20 +26,22 @@ Install `pcl-ros` ((replace {ros-version} with your ros version name e.g: noetic
 
     sudo apt-get install ros-{ros-version}-pcl-ros
 
-Build the package(s):
+Build the package(s) and source them:
 
     cd ..
     catkin build mapper_emvs
-    source ~/roller_ws/devel/setup.bash
+    source devel/setup.bash
 
-# Running example
+# Running example with mustard_slow.bag
 
-Download [stairs.bag](https://drive.google.com/file/d/10F9h2M2PAGDdByKMUF5B6sC79MuqnsQy/view?usp=sharing) data file
-
-**Run the example**:
+**Run the example** (Filling in all parameters in {}. --chunk_size and --step_size are optional - defaults are 75000 and 5000 events respectively):
 
     roscd mapper_emvs
-    rosrun mapper_emvs run_emvs --bag_filename=/path/to/stairs.bag --flagfile=cfg/stairs.conf
+    python scripts/generate_increment.py --bag_filename bags/{bag_name.bag} --output_dir {output_dir} --flagfile cfg/{config.conf}
+You should have the saved pointclouds, confidence maps, and respective depth maps within your specified {output_dir}
+
+
+
 
 
 # Visualization
@@ -54,9 +56,6 @@ and then run (remove -i /path/to/pointcloud.pcd to run the most recently compute
 
     python scripts/visualize_pointcloud.py -i /path/to/pointcloud.pcd
     
-You should be able to inspect the pointcloud as shown in the image below (Stairs with PointCloud screenshots)
-
-<img src="mapper_emvs/images/slant_depth.png" width="40%">
 
 ## Disparity Space Image (DSI)
 
