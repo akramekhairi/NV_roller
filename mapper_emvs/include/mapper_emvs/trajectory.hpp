@@ -3,13 +3,14 @@
 #include <map>
 #include <ros/time.h>
 #include <mapper_emvs/geometry_utils.hpp>
+#include <glog/logging.h>
 
 template<class DerivedTrajectory>
 class Trajectory
 {
-public:  
+public:
   typedef std::map<ros::Time, geometry_utils::Transformation> PoseMap;
-  
+
   DerivedTrajectory& derived()
   { return static_cast<DerivedTrajectory&>(*this); }
 
@@ -24,7 +25,7 @@ public:
   {
     return derived().getPoseAt(t, T);
   }
-    
+
   void getFirstControlPose(geometry_utils::Transformation* T, ros::Time* t) const
   {
     *t = poses_.begin()->first;
@@ -36,12 +37,12 @@ public:
     *t = poses_.rbegin()->first;
     *T = poses_.rbegin()->second;
   }
-  
+
   size_t getNumControlPoses() const
   {
     return poses_.size();
   }
-    
+
   bool print() const
   {
     size_t control_pose_idx = 0u;
@@ -82,20 +83,33 @@ public:
     auto it1 = poses_.upper_bound(t);
     if(it1 ==  poses_.begin())
     {
-      LOG_FIRST_N(WARNING, 5) << "Cannot extrapolate in the past. Requested pose: "
+      LOG_FIRST_N(INFO, 5) << "Extrapolating in the past. Requested pose: "
                               << t << " but the earliest pose available is at time: "
                               << poses_.begin()->first;
-      return false;
+      // Extrapolate from the first two poses
+      auto it0 = poses_.begin();
+      it1 = std::next(it0);
+      t0_ = it0->first;
+      T0_ = it0->second;
+      t1_ = it1->first;
+      T1_ = it1->second;
     }
     else if(it1 == poses_.end())
     {
-      LOG_FIRST_N(WARNING, 5) << "Cannot extrapolate in the future. Requested pose: "
+      LOG_FIRST_N(INFO, 5) << "Extrapolating in the future. Requested pose: "
                               << t << " but the latest pose available is at time: "
                               << (poses_.rbegin())->first;
-      return false;
+      // Extrapolate from the last two poses
+      it1 = std::prev(poses_.end());
+      auto it0 = std::prev(it1);
+      t0_ = it0->first;
+      T0_ = it0->second;
+      t1_ = it1->first;
+      T1_ = it1->second;
     }
     else
     {
+      // Interpolate between two poses
       auto it0 = std::prev(it1);
       t0_ = (it0)->first;
       T0_ = (it0)->second;
@@ -103,7 +117,7 @@ public:
       T1_ = (it1)->second;
     }
 
-    // Linear interpolation in SE(3)
+    // Linear interpolation/extrapolation in SE(3)
     auto T_relative = T0_.inverse() * T1_;
     auto delta_t = (t - t0_).toSec() / (t1_ - t0_).toSec();
     T = T0_ * geometry_utils::Transformation::exp(delta_t * T_relative.log());
