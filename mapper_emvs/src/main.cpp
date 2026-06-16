@@ -11,6 +11,9 @@
 
 #include <chrono>
 
+#include <Eigen/Dense>
+#include <opencv2/core/eigen.hpp>
+
 // Input parameters
 DEFINE_string(bag_filename, "input.bag", "Path to the rosbag");
 DEFINE_string(event_topic, "/capture_node/events", "Name of the event topic (default: /dvs/events)");
@@ -45,6 +48,16 @@ DEFINE_int32(min_num_neighbors, 3, "Minimum number of points for the radius filt
  * extract a depth map (and point cloud) from the DSI,
  * and save to disk.
  */
+
+template<typename T>
+cv::Mat warpToReference(const cv::Mat& src,
+                       const geometry_utils::Transformation& T_rv_w_src,
+                       const geometry_utils::Transformation& T_rv_w_target,
+                       const image_geometry::PinholeCameraModel& cam,
+                       T invalid_value,
+                       bool is_binary_mask = false,
+                       const cv::Mat& depth_map = cv::Mat());
+
 int main(int argc, char** argv)
 {
   google::InitGoogleLogging(argv[0]);
@@ -89,7 +102,10 @@ int main(int argc, char** argv)
   trajectory.getLastControlPose(&T1_, &t1_);
   geometry_utils::Transformation T_w_rv;
   trajectory.getPoseAt(ros::Time(0.5 * (t0_.toSec() + t1_.toSec())), T_w_rv);
-  geometry_utils::Transformation T_rv_w = T_w_rv.inverse();
+  // Three reference views generated for start, mid, and end of time window
+  geometry_utils::Transformation T_rv_w_mid = T_w_rv.inverse();
+  geometry_utils::Transformation T_rv_w_start = T0_.inverse();
+  geometry_utils::Transformation T_rv_w_end = T1_.inverse();
 
   // Initialize the DSI
   CHECK_LE(FLAGS_dimZ, 256) << "Number of depth planes should be <= 256";
@@ -97,75 +113,225 @@ int main(int argc, char** argv)
                            FLAGS_min_depth, FLAGS_max_depth,
                            FLAGS_fov_deg);
 
-  // Initialize mapper
-  EMVS::MapperEMVS mapper(cam, dsi_shape);
+  // Initialize mapper for all reference views
+  EMVS::MapperEMVS mapper_mid(cam, dsi_shape);
+  EMVS::MapperEMVS mapper_start(cam, dsi_shape);
+  EMVS::MapperEMVS mapper_end(cam, dsi_shape);
 
   // 1. Back-project events into the DSI
   std::chrono::high_resolution_clock::time_point t_start_dsi = std::chrono::high_resolution_clock::now();
-  mapper.evaluateDSI(events, trajectory, T_rv_w);
+  mapper_mid.evaluateDSI(events, trajectory, T_rv_w_mid);
+  mapper_start.evaluateDSI(events, trajectory, T_rv_w_start);
+  mapper_end.evaluateDSI(events, trajectory, T_rv_w_end);
   std::chrono::high_resolution_clock::time_point t_end_dsi = std::chrono::high_resolution_clock::now();
   auto duration_dsi = std::chrono::duration_cast<std::chrono::milliseconds>(t_end_dsi - t_start_dsi ).count();
   LOG(INFO) << "Time to evaluate DSI: " << duration_dsi << " milliseconds";
   LOG(INFO) << "Number of events processed: " << events.size() << " events";
   LOG(INFO) << "Number of events processed per second: " << static_cast<float>(events.size()) / (1000.f * static_cast<float>(duration_dsi)) << " Mev/s";
 
-  LOG(INFO) << "Mean square = " << mapper.dsi_.computeMeanSquare();
+  LOG(INFO) << "Mean square = " << mapper_mid.dsi_.computeMeanSquare();
 
   // Write the DSI (3D voxel grid) to disk
-  mapper.dsi_.writeGridNpy("dsi.npy");
+  mapper_mid.dsi_.writeGridNpy("dsi.npy");
 
 
   // 2. Extract semi-dense depth map from DSI
-  EMVS::OptionsDepthMap opts_depth_map;
-  opts_depth_map.adaptive_threshold_kernel_size_ = FLAGS_adaptive_threshold_kernel_size;
-  opts_depth_map.adaptive_threshold_c_ = FLAGS_adaptive_threshold_c;
-  opts_depth_map.median_filter_size_ = FLAGS_median_filter_size;
-  cv::Mat depth_map, confidence_map, semidense_mask;
-  mapper.getDepthMapFromDSI(depth_map, confidence_map, semidense_mask, opts_depth_map);
+  EMVS::OptionsDepthMap opts_depth_mid;
+  opts_depth_mid.adaptive_threshold_kernel_size_ = FLAGS_adaptive_threshold_kernel_size;
+  opts_depth_mid.adaptive_threshold_c_ = FLAGS_adaptive_threshold_c;
+  opts_depth_mid.median_filter_size_ = FLAGS_median_filter_size;
+  EMVS::OptionsDepthMap opts_depth_start;
+  opts_depth_start.adaptive_threshold_kernel_size_ = FLAGS_adaptive_threshold_kernel_size;
+  opts_depth_start.adaptive_threshold_c_ = FLAGS_adaptive_threshold_c;
+  opts_depth_start.median_filter_size_ = FLAGS_median_filter_size;
+  EMVS::OptionsDepthMap opts_depth_end;
+  opts_depth_end.adaptive_threshold_kernel_size_ = FLAGS_adaptive_threshold_kernel_size;
+  opts_depth_end.adaptive_threshold_c_ = FLAGS_adaptive_threshold_c;
+  opts_depth_end.median_filter_size_ = FLAGS_median_filter_size;
+  cv::Mat depth_mid, confidence_mid, semidense_mask_mid;
+  cv::Mat depth_start, confidence_start, semidense_mask_start;
+  cv::Mat depth_end, confidence_end, semidense_mask_end;
+  mapper_mid.getDepthMapFromDSI(depth_mid, confidence_mid, semidense_mask_mid, opts_depth_mid);
+  mapper_start.getDepthMapFromDSI(depth_start, confidence_start, semidense_mask_start, opts_depth_start);
+  mapper_end.getDepthMapFromDSI(depth_end, confidence_end, semidense_mask_end, opts_depth_end);
+
+  // Warp start and end depth products into the mid reference view.
+  const cv::Mat depth_start_source = depth_start.clone();
+  const cv::Mat depth_end_source = depth_end.clone();
+  cv::Mat depth_start_warped = warpToReference<float>(depth_start, T_rv_w_start, T_rv_w_mid, cam, 0.0f, false, depth_start_source);
+  depth_start = depth_start_warped;
+  cv::Mat semidense_mask_start_warped = warpToReference<uchar>(semidense_mask_start, T_rv_w_start, T_rv_w_mid, cam, 0, true, depth_start_source);
+  semidense_mask_start = semidense_mask_start_warped;
+  cv::Mat confidence_start_warped = warpToReference<float>(confidence_start, T_rv_w_start, T_rv_w_mid, cam, 0.0f, false, depth_start_source);
+  confidence_start = confidence_start_warped;
+
+  cv::Mat depth_end_warped = warpToReference<float>(depth_end, T_rv_w_end, T_rv_w_mid, cam, 0.0f, false, depth_end_source);
+  depth_end = depth_end_warped;
+  cv::Mat semidense_mask_end_warped = warpToReference<uchar>(semidense_mask_end, T_rv_w_end, T_rv_w_mid, cam, 0, true, depth_end_source);
+  semidense_mask_end = semidense_mask_end_warped;
+  cv::Mat confidence_end_warped = warpToReference<float>(confidence_end, T_rv_w_end, T_rv_w_mid, cam, 0.0f, false, depth_end_source);
+  confidence_end = confidence_end_warped;
+
+  // 3. Fuse depth maps with weighted averaging
+  cv::Mat fused_depth = cv::Mat::zeros(depth_mid.size(), CV_32F);
+  for(int y = 0; y < depth_mid.rows; y++) {
+    for(int x = 0; x < depth_mid.cols; x++) {
+      float depth_m = depth_mid.at<float>(y, x);
+      float depth_s = depth_start_warped.at<float>(y, x);
+      float depth_e = depth_end_warped.at<float>(y, x);
+
+      fused_depth.at<float>(y, x) = (3 * depth_m + 4 * depth_s + 2 * depth_e) / 3;
+    }
+  }
   
   // Save depth map, confidence map and semi-dense mask
 
   // Save semi-dense mask as an image
-  cv::imwrite("semidense_mask.png", 255 * semidense_mask);
+  cv::imwrite("semidense_mask_mid.png", 255 * semidense_mask_mid);
+  cv::imwrite("semidense_mask_start.png", 255 * semidense_mask_start);
+  cv::imwrite("semidense_mask_end.png", 255 * semidense_mask_end);
 
   // Save confidence map as an 8-bit image
-  cv::Mat confidence_map_255;
-  cv::normalize(confidence_map, confidence_map_255, 0, 255.0, cv::NORM_MINMAX, CV_32FC1);
-  cv::imwrite("confidence_map.png", confidence_map_255);
+  cv::Mat confidence_mid_255;
+  cv::normalize(confidence_mid, confidence_mid_255, 0, 255.0, cv::NORM_MINMAX, CV_32FC1);
+  cv::imwrite("confidence_mid.png", confidence_mid_255);
+  cv::Mat confidence_start_255;
+  cv::normalize(confidence_start, confidence_start_255, 0, 255.0, cv::NORM_MINMAX, CV_32FC1);
+  cv::imwrite("confidence_start.png", confidence_start_255);
+  cv::Mat confidence_end_255;
+  cv::normalize(confidence_end, confidence_end_255, 0, 255.0, cv::NORM_MINMAX, CV_32FC1);
+  cv::imwrite("confidence_end.png", confidence_end_255);
 
   // Normalize depth map using given min and max depth values
-  cv::Mat depth_map_255 = (depth_map - dsi_shape.min_depth_) * (255.0 / (dsi_shape.max_depth_ - dsi_shape.min_depth_));
-  cv::imwrite("depth_map.png", depth_map_255);
+  cv::Mat depth_mid_255 = (depth_mid - dsi_shape.min_depth_) * (255.0 / (dsi_shape.max_depth_ - dsi_shape.min_depth_));
+  cv::imwrite("depth_mid.png", depth_mid_255);
+  cv::Mat depth_start_255 = (depth_start - dsi_shape.min_depth_) * (255.0 / (dsi_shape.max_depth_ - dsi_shape.min_depth_));
+  cv::imwrite("depth_start.png", depth_start_255);
+  cv::Mat depth_end_255 = (depth_end - dsi_shape.min_depth_) * (255.0 / (dsi_shape.max_depth_ - dsi_shape.min_depth_));
+  cv::imwrite("depth_end.png", depth_end_255);
 
   // Save pseudo-colored depth map on white canvas
   cv::Mat depthmap_8bit, depthmap_color;
-  depth_map_255.convertTo(depthmap_8bit, CV_8U);
+  depth_mid_255.convertTo(depthmap_8bit, CV_8U);
   cv::applyColorMap(depthmap_8bit, depthmap_color, cv::COLORMAP_RAINBOW);
-  cv::Mat depth_on_canvas = cv::Mat(depth_map.rows, depth_map.cols, CV_8UC3, cv::Scalar(1,1,1)*255);
-  depthmap_color.copyTo(depth_on_canvas, semidense_mask);
+  cv::Mat depth_on_canvas = cv::Mat(depth_mid.rows, depth_mid.cols, CV_8UC3, cv::Scalar(1,1,1)*255);
+  depthmap_color.copyTo(depth_on_canvas, semidense_mask_mid);
   cv::imwrite("depth_colored.png", depth_on_canvas);
 
   // New code for inverted grayscale depth map
-  cv::Mat inverted_depth_map_255 = 255.0 - ((depth_map - dsi_shape.min_depth_) * (255.0 / (dsi_shape.max_depth_ - dsi_shape.min_depth_)));
-  cv::Mat inverted_depth_8bit;
-  inverted_depth_map_255.convertTo(inverted_depth_8bit, CV_8U);
-  cv::Mat depth_on_black = cv::Mat(depth_map.rows, depth_map.cols, CV_8U, cv::Scalar(0));
-  inverted_depth_8bit.copyTo(depth_on_black, semidense_mask);
-  cv::imwrite("depth_grayscale_inverted.png", depth_on_black);
+  cv::Mat inverted_depth_mid_255 = 255.0 - ((fused_depth - dsi_shape.min_depth_) * (255.0 / (dsi_shape.max_depth_ - dsi_shape.min_depth_)));
+  cv::Mat inverted_depth_mid_8bit;
+  inverted_depth_mid_255.convertTo(inverted_depth_mid_8bit, CV_8U);
+  cv::Mat depth_on_black_mid = cv::Mat(depth_mid.rows, depth_mid.cols, CV_8U, cv::Scalar(0));
+  inverted_depth_mid_8bit.copyTo(depth_on_black_mid, semidense_mask_mid);
+  cv::imwrite("depth_grayscale_mid.png", depth_on_black_mid);
+
+  cv::Mat inverted_depth_start_255 = 255.0 - ((depth_start - dsi_shape.min_depth_) * (255.0 / (dsi_shape.max_depth_ - dsi_shape.min_depth_)));
+  cv::Mat inverted_depth_start_8bit;
+  inverted_depth_start_255.convertTo(inverted_depth_start_8bit, CV_8U);
+  cv::Mat depth_on_black_start = cv::Mat(depth_start.rows, depth_start.cols, CV_8U, cv::Scalar(0));
+  inverted_depth_start_8bit.copyTo(depth_on_black_start, semidense_mask_start);
+  cv::imwrite("depth_grayscale_start.png", depth_on_black_start);
+
+  cv::Mat inverted_depth_end_255 = 255.0 - ((depth_end - dsi_shape.min_depth_) * (255.0 / (dsi_shape.max_depth_ - dsi_shape.min_depth_)));
+  cv::Mat inverted_depth_end_8bit;
+  inverted_depth_end_255.convertTo(inverted_depth_end_8bit, CV_8U);
+  cv::Mat depth_on_black_end = cv::Mat(depth_end.rows, depth_end.cols, CV_8U, cv::Scalar(0));
+  inverted_depth_end_8bit.copyTo(depth_on_black_end, semidense_mask_end);
+  cv::imwrite("depth_grayscale_end.png", depth_on_black_end);
 
 
-  // 3. Convert semi-dense depth map to point cloud
+  // 4. Convert semi-dense depth map to point cloud
   EMVS::OptionsPointCloud opts_pc;
   opts_pc.radius_search_ = FLAGS_radius_search;
   opts_pc.min_num_neighbors_ = FLAGS_min_num_neighbors;
   
   EMVS::PointCloud::Ptr pc (new EMVS::PointCloud);
-  mapper.getPointcloud(depth_map, semidense_mask, opts_pc, pc);
+  mapper_mid.getPointcloud(depth_mid, semidense_mask_mid, opts_pc, pc);
   
   // Save point cloud to disk
   pcl::io::savePCDFileASCII ("pointcloud.pcd", *pc);
   LOG(INFO) << "Saved " << pc->points.size () << " data points to pointcloud.pcd";
   
   return 0;
+}
+
+template<typename T>
+cv::Mat warpToReference(const cv::Mat& src,
+                       const geometry_utils::Transformation& T_rv_w_src,
+                       const geometry_utils::Transformation& T_rv_w_target,
+                       const image_geometry::PinholeCameraModel& cam,
+                       T invalid_value,
+                       bool is_binary_mask,
+                       const cv::Mat& depth_map)
+{
+  // Get camera intrinsics
+  const double fx = cam.fx();
+  const double fy = cam.fy();
+  const double cx = cam.cx();
+  const double cy = cam.cy();
+  const int width = cam.fullResolution().width;
+  const int height = cam.fullResolution().height;
+
+  // Initialize warped result and depth buffer
+  cv::Mat warped_result(height, width, src.type(), cv::Scalar(invalid_value));
+  cv::Mat depth_buffer = cv::Mat::zeros(height, width, CV_32F);
+
+  geometry_utils::Transformation T_target_src = T_rv_w_target * T_rv_w_src.inverse();
+  Eigen::Matrix3d R = T_target_src.getRotationMatrix();
+  Eigen::Vector3d t = T_target_src.getPosition();
+
+  for(int y = 0; y < src.rows; ++y) {
+    for(int x = 0; x < src.cols; ++x) {
+      // Skip invalid pixels based on data type
+      if(is_binary_mask) {
+        if(src.at<uchar>(y, x) == 0) continue;
+      } else {
+        if(src.at<float>(y, x) <= 0) continue;
+      }
+
+      const float depth = depth_map.at<float>(y, x);
+      if(depth <= 0) continue;
+
+      // Back-project to 3D in source view
+      Eigen::Vector3d p_src(
+          (x - cx) * depth / fx,
+          (y - cy) * depth / fy,
+          depth);
+
+      // Transform to target view coordinates
+      Eigen::Vector3d p_target = R * p_src + t;
+      if(p_target.z() <= 0) continue;
+
+      // Project to target image plane
+      const float u = (p_target.x() * fx / p_target.z()) + cx;
+      const float v = (p_target.y() * fy / p_target.z()) + cy;
+
+      if(u >= 0 && u < width && v >= 0 && v < height) {
+        const int u_i = static_cast<int>(u);
+        const int v_i = static_cast<int>(v);
+
+        // Z-buffering with depth test
+        float& current_depth = depth_buffer.at<float>(v_i, u_i);
+        if(current_depth == 0 || p_target.z() < current_depth) {
+          current_depth = p_target.z();
+          warped_result.at<T>(v_i, u_i) = src.at<T>(y, x);
+        }
+      }
+    }
+  }
+
+  // Post-processing
+  if(!is_binary_mask) {
+    // Median filtering for depth/confidence maps
+    cv::medianBlur(warped_result, warped_result, 3);
+  }
+
+  if(is_binary_mask) {
+    warped_result = (warped_result > 0);
+    warped_result.convertTo(warped_result, CV_8U, 255);
+  }
+
+  return warped_result;
 }
 

@@ -5,3 +5,16 @@ mapper_emvs/depth_map.png
 mapper_emvs/dsi.npy
 mapper_emvs/pointcloud.pcd
 mapper_emvs/semidense_mask.png
+mapper_emvs/*.bag
+mapper_emvs/*.png
+mapper_emvs/*.pcd
+mapper_emvs/*.npy
+mapper_emvs/*.conf
+mapper_emvs/*.yaml
+mapper_emvs/*.json
+mapper_emvs/*.txt
+mapper_emvs/*.log
+mapper_emvs/*.pyc
+mapper_emvs/*.pyo
+mapper_emvs/*.pyd
+mapper_emvs/*.pyw

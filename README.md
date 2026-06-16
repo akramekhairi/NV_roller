@@ -1,6 +1,10 @@
 # Overview
 
-Depth estimation algorithm for neuromorphic-vision based roller tactile sensor (based on EMVS)
+Depth estimation algorithm for neuromorphic-vision based roller tactile sensor (based on EMVS).
+
+This fork keeps the EMVS disparity-space reconstruction pipeline, but adapts it for roller tactile sensing. Instead of relying on externally supplied poses, `mapper_emvs` builds a simple horizontal constant-velocity trajectory from the configured time window and speed. This matches the roller assumption that motion is primarily along one direction during contact.
+
+Compared with baseline EMVS, the main executable also evaluates multiple reference views across the motion window. Depth maps from the start and end references are warped into the middle reference frame and combined with the middle estimate using weighted multi-reference fusion. This Bayesian-model-averaging style fusion is intended to improve depth consistency and reduce curvature-induced depth errors that appear when the roller surface bends under contact.
 
 # Installation
 
